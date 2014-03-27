@@ -223,7 +223,7 @@ def _attack(params):
         stdin, stdout, stderr = client.exec_command('tempfile -s .csv')
         params['csv_filename'] = stdout.read().strip()
         if params['csv_filename']:
-            options += ' -e %(csv_filename)s' % params
+            options += ' -l%(csv_filename)s' % params
         else:
             print 'Bee %i lost sight of the target (connection timed out creating csv_filename).' % params['i']
             return None
@@ -235,26 +235,27 @@ def _attack(params):
 
 
         if params['cookies'] is not '':
-            options += ' -H \"Cookie: %ssessionid=NotARealSessionID;\"' % params['cookies']
+            options += ' --header=\"Cookie: %ssessionid=NotARealSessionID;\"' % params['cookies']
         else:
-            options += ' -C \"sessionid=NotARealSessionID\"'
+            options += ' --header=\"Cookie: sessionid=NotARealSessionID;\"'
 
         params['options'] = options
-        benchmark_command = 'ab -r -n %(num_requests)s -c %(concurrent_requests)s %(options)s "%(url)s"' % params
+        benchmark_command = 'rm %(csv_filename)s;siege -r%(num_requests)s -c%(concurrent_requests)s %(options)s "%(url)s"' % params
         stdin, stdout, stderr = client.exec_command(benchmark_command)
 
         response = {}
 
         ab_results = stdout.read()
-        ms_per_request_search = re.search('Time\ per\ request:\s+([0-9.]+)\ \[ms\]\ \(mean\)', ab_results)
+        siege_results = stderr.read()
+        ms_per_request_search = re.search('Response\ time:\s+([0-9.]+)\ secs?', siege_results)#Time\ per\ request:\s+([0-9.]+)\ \[ms\]\ \(mean\)', ab_results)
 
         if not ms_per_request_search:
             print 'Bee %i lost sight of the target (connection timed out running ab).' % params['i']
             return None
 
-        requests_per_second_search = re.search('Requests\ per\ second:\s+([0-9.]+)\ \[#\/sec\]\ \(mean\)', ab_results)
-        failed_requests = re.search('Failed\ requests:\s+([0-9.]+)', ab_results)
-        complete_requests_search = re.search('Complete\ requests:\s+([0-9]+)', ab_results)
+        requests_per_second_search = re.search('Transaction\ rate:\s+([0-9.]+)\ trans\/sec', siege_results)
+        failed_requests = re.search('Failed\ transactions:\s+([0-9.]+)', siege_results)
+        complete_requests_search = re.search('Successful\ transactions:\s+([0-9.]+)', siege_results)
 
         response['ms_per_request'] = float(ms_per_request_search.group(1))
         response['requests_per_second'] = float(requests_per_second_search.group(1))
@@ -263,8 +264,9 @@ def _attack(params):
 
         stdin, stdout, stderr = client.exec_command('cat %(csv_filename)s' % params)
         response['request_time_cdf'] = []
-        for row in csv.DictReader(stdout):
-            row["Time in ms"] = float(row["Time in ms"])
+        csv_file_content = re.sub(' ?, ?', ',', re.sub(' +', ' ', stdout.read())).strip()
+        for row in csv.DictReader(csv_file_content.splitlines(), delimiter=','):
+            row["Elap Time"] = float(row["Elap Time"])
             response['request_time_cdf'].append(row)
         if not response['request_time_cdf']:
             print 'Bee %i lost sight of the target (connection timed out reading csv).' % params['i']
@@ -336,7 +338,7 @@ def _create_request_time_cdf_csv(results, complete_bees_params, request_time_cdf
             for i in range(100):
                 row = [i, request_time_cdf[i]]
                 for r in results:
-                    row.append(r['request_time_cdf'][i]["Time in ms"])
+                    row.append(float(r['request_time_cdf'][i]["Elap Time"])*1000)
                 writer.writerow(row)
 
 
@@ -354,7 +356,7 @@ def _get_request_time_cdf(total_complete_requests, complete_bees):
         cdf = r['request_time_cdf']
         for i in range(n):
             j = int(random.random() * len(cdf))
-            sample_response_times.append(cdf[j]["Time in ms"])
+            sample_response_times.append(float(cdf[j]["Elap Time"])*1000)
     sample_response_times.sort()
     request_time_cdf = sample_response_times[0:sample_size:sample_size / n_final_sample]
 
